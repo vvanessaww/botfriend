@@ -108,3 +108,40 @@ class TestActionQueue:
         pending = queue.pending_items()
         assert len(pending) == 1
         assert pending[0][1].description == "B"
+
+    def test_reject_out_of_bounds_raises(self):
+        queue = ActionQueue()
+        with pytest.raises(IndexError):
+            queue.reject(0)
+
+    def test_reject_non_pending_raises(self):
+        queue = ActionQueue()
+        item = ActionItem(
+            description="Make button blue",
+            speakers=("Speaker 1",),
+            confidence="high",
+            status=ActionStatus.EXECUTING,
+        )
+        queue = queue.add(item)
+        with pytest.raises(ValueError, match="Can only reject pending items"):
+            queue.reject(0)
+
+    def test_mark_executing_out_of_bounds_raises(self):
+        queue = ActionQueue()
+        with pytest.raises(IndexError):
+            queue.mark_executing(0)
+
+    def test_mark_done_out_of_bounds_raises(self):
+        queue = ActionQueue()
+        with pytest.raises(IndexError):
+            queue.mark_done(0)
+
+    def test_mark_failed_out_of_bounds_raises(self):
+        queue = ActionQueue()
+        with pytest.raises(IndexError):
+            queue.mark_failed(0)
+
+    def test_edit_out_of_bounds_raises(self):
+        queue = ActionQueue()
+        with pytest.raises(IndexError):
+            queue.edit(0, "new description")
