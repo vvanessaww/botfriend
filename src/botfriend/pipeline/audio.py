@@ -24,8 +24,8 @@ class AudioCapture:
     def __init__(
         self,
         sample_rate: int = 16000,
-        chunk_duration: float = 3.0,
-        overlap_duration: float = 1.0,
+        chunk_duration: float = 2.0,
+        overlap_duration: float = 0.5,
     ) -> None:
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
@@ -49,6 +49,10 @@ class AudioCapture:
         while len(self._buffer) >= self.chunk_size:
             chunk_data = self._buffer[: self.chunk_size].copy()
             self._buffer = self._buffer[self.chunk_size - self.overlap_size :]
+            # Normalize audio so Whisper gets a strong signal
+            peak = np.abs(chunk_data).max()
+            if peak > 0.001:
+                chunk_data = chunk_data / peak * 0.9
             try:
                 self._queue.put_nowait(
                     AudioChunk(data=chunk_data, sample_rate=self.sample_rate)

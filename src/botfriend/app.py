@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -34,8 +37,8 @@ class BotfriendApp(App):
     }
     #execution {
         height: auto;
-        min-height: 5;
-        max-height: 12;
+        min-height: 8;
+        max-height: 20;
     }
     """
 
@@ -47,25 +50,27 @@ class BotfriendApp(App):
     def __init__(
         self,
         project_dir: str,
-        model_size: str = "base",
+        transcriber: Optional[Transcriber] = None,
         hf_token: Optional[str] = None,
         enable_audio: bool = True,
     ) -> None:
         super().__init__()
         self.project_dir = project_dir
-        self.model_size = model_size
+        self._transcriber = transcriber
         self.hf_token = hf_token
         self.enable_audio = enable_audio
         self._queue = ActionQueue()
         self._paused = False
         self._executing = False
+        self._listening = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="top-row"):
                 yield TranscriptPanel()
                 yield QueuePanel()
-            yield ExecutionLog()
+            log_path = Path(self.project_dir) / "botfriend.log"
+            yield ExecutionLog(log_path=log_path)
 
     def on_mount(self) -> None:
         self.query_one(TranscriptPanel).id = "transcript"
@@ -73,42 +78,65 @@ class BotfriendApp(App):
         self.query_one(ExecutionLog).id = "execution"
         self.query_one(QueuePanel).focus()
 
+        exec_log = self.query_one(ExecutionLog)
+
         if self.enable_audio:
             self._start_pipeline()
+            exec_log.write("[bold green]Mic LISTENING[/] -- press [bold]p[/] to pause")
+        else:
+            exec_log.write("[dim]Audio disabled (test mode)[/]")
 
     def _start_pipeline(self) -> None:
         self._audio = AudioCapture()
-        self._transcriber = Transcriber(model_size=self.model_size)
+        if self._transcriber is None:
+            self._transcriber = Transcriber()
         self._coding_runner = ClaudeRunner(project_dir=self.project_dir)
         self._extraction_runner = ClaudeRunner(project_dir=self.project_dir)
         self._extractor = ActionExtractor(runner=self._extraction_runner)
-
-        if self.hf_token:
-            self._transcriber.enable_diarization(self.hf_token)
+        self._listening = True
 
         self.run_worker(self._audio_loop(), exclusive=False)
         self.run_worker(self._extraction_loop(), exclusive=False)
 
     async def _audio_loop(self) -> None:
         transcript_panel = self.query_one(TranscriptPanel)
+        exec_log = self.query_one(ExecutionLog)
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=1)
         async for chunk in self._audio.stream():
             if self._paused:
                 continue
-            segments = self._transcriber.transcribe(chunk)
-            for seg in segments:
-                self.call_from_thread(transcript_panel.add_segment, seg)
-                self._extractor.add_segment(seg)
+            try:
+                segments = await loop.run_in_executor(
+                    executor,
+                    functools.partial(self._transcriber.transcribe, chunk),
+                )
+                for seg in segments:
+                    transcript_panel.add_segment(seg)
+                    self._extractor.add_segment(seg)
+            except Exception as e:
+                exec_log.write(f"[bold red]Transcription error:[/] {e}")
 
     async def _extraction_loop(self) -> None:
+        exec_log = self.query_one(ExecutionLog)
         while True:
             await asyncio.sleep(self._extractor.interval_seconds)
             if self._paused:
                 continue
-            items = await self._extractor.extract()
-            for item in items:
-                self._queue = self._queue.add(item)
-                queue_panel = self.query_one(QueuePanel)
-                self.call_from_thread(queue_panel.update_queue, self._queue)
+            if not self._extractor.transcript_buffer:
+                continue
+            try:
+                exec_log.write("[dim]Extracting action items...[/]")
+                items = await self._extractor.extract()
+                if items:
+                    exec_log.write(f"[bold cyan]Found {len(items)} action item(s)[/]")
+                    for item in items:
+                        self._queue = self._queue.add(item)
+                    self.query_one(QueuePanel).update_queue(self._queue)
+                else:
+                    exec_log.write("[dim]No new action items found[/]")
+            except Exception as e:
+                exec_log.write(f"[bold red]Extraction error:[/] {e}")
 
     async def _execute_next(self) -> None:
         if self._executing:
@@ -130,6 +158,20 @@ class BotfriendApp(App):
         if execution_result.success:
             self._queue = self._queue.mark_done(index)
             exec_log.log_done(item.description)
+            # Show what Claude said it did
+            summary = execution_result.text
+            if len(summary) > 300:
+                summary = summary[:300] + "..."
+            exec_log.write(f"  [dim]{summary}[/]")
+            # Show file changes
+            try:
+                diff = await self._coding_runner.get_diff()
+                if diff:
+                    exec_log.write(f"  [bold magenta]Changes:[/]")
+                    for line in diff.split("\n")[:10]:
+                        exec_log.write(f"    {line}")
+            except Exception:
+                pass
         else:
             self._queue = self._queue.mark_failed(index)
             exec_log.log_failed(item.description, execution_result.text)
@@ -160,5 +202,35 @@ class BotfriendApp(App):
 
     def action_toggle_pause(self) -> None:
         self._paused = not self._paused
-        status = "PAUSED" if self._paused else "LISTENING"
-        self.notify(f"Mic: {status}")
+        exec_log = self.query_one(ExecutionLog)
+        if self._paused:
+            if hasattr(self, "_audio"):
+                self._audio.stop()
+            self._listening = False
+            exec_log.write("[bold yellow]Mic PAUSED[/] -- press [bold]p[/] to resume")
+        else:
+            self._listening = True
+            if self.enable_audio:
+                self.run_worker(self._restart_audio(), exclusive=False)
+            exec_log.write("[bold green]Mic LISTENING[/] -- press [bold]p[/] to pause")
+
+    async def _restart_audio(self) -> None:
+        """Restart the audio stream after unpausing."""
+        self._audio = AudioCapture()
+        transcript_panel = self.query_one(TranscriptPanel)
+        exec_log = self.query_one(ExecutionLog)
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=1)
+        async for chunk in self._audio.stream():
+            if self._paused:
+                break
+            try:
+                segments = await loop.run_in_executor(
+                    executor,
+                    functools.partial(self._transcriber.transcribe, chunk),
+                )
+                for seg in segments:
+                    transcript_panel.add_segment(seg)
+                    self._extractor.add_segment(seg)
+            except Exception as e:
+                exec_log.write(f"[bold red]Transcription error:[/] {e}")

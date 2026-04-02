@@ -17,9 +17,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="base",
-        choices=["tiny", "base", "small", "medium", "large-v3"],
-        help="Whisper model size (default: base)",
+        default="base.en",
+        choices=["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "large-v3"],
+        help="Whisper model size (default: base.en)",
     )
     parser.add_argument(
         "--no-diarization",
@@ -46,11 +46,22 @@ def main() -> None:
             )
             sys.exit(1)
 
+    # Pre-load Whisper model before starting TUI to avoid
+    # tqdm/multiprocessing conflicts with Textual's event loop on Python 3.14
+    print(f"Loading Whisper model '{args.model}'...")
+    from botfriend.pipeline.transcriber import Transcriber
+
+    transcriber = Transcriber(model_size=args.model)
+    if hf_token:
+        print("Loading speaker diarization model...")
+        transcriber.enable_diarization(hf_token)
+    print("Models loaded. Starting TUI...")
+
     from botfriend.app import BotfriendApp
 
     app = BotfriendApp(
         project_dir=project_dir,
-        model_size=args.model,
+        transcriber=transcriber,
         hf_token=hf_token,
     )
     app.run()

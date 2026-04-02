@@ -85,6 +85,28 @@ class ClaudeRunner:
         except json.JSONDecodeError:
             return ExecutionResult(text=raw, session_id=self.session_id, success=True)
 
+    async def get_diff(self) -> str:
+        """Get git diff of uncommitted changes in the project directory."""
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "--stat",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.project_dir,
+        )
+        stdout, stderr = await proc.communicate()
+        stat = stdout.decode().strip()
+        if not stat:
+            # Check for new untracked files
+            proc2 = await asyncio.create_subprocess_exec(
+                "git", "status", "--short",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.project_dir,
+            )
+            stdout2, _ = await proc2.communicate()
+            stat = stdout2.decode().strip()
+        return stat or "(no file changes detected)"
+
     async def extract_actions(
         self,
         transcript: str,
@@ -100,6 +122,7 @@ class ClaudeRunner:
             "claude",
             "-p", prompt,
             "--output-format", "json",
+            "--model", "claude-haiku-4-5-20251001",
         ]
 
         env = {**os.environ}
@@ -114,15 +137,21 @@ class ClaudeRunner:
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
-            return []
+            err = stderr.decode().strip() or stdout.decode().strip()
+            raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {err[:200]}")
 
         raw = stdout.decode()
         try:
             data = json.loads(raw)
             result_text = data.get("result", raw)
-            actions = json.loads(result_text)
+            # Claude may return the JSON array directly or wrapped in markdown
+            clean = result_text.strip()
+            if clean.startswith("```"):
+                lines = clean.split("\n")
+                clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean
+            actions = json.loads(clean)
             if isinstance(actions, list):
                 return actions
             return []
-        except (json.JSONDecodeError, TypeError):
-            return []
+        except (json.JSONDecodeError, TypeError) as e:
+            raise RuntimeError(f"Failed to parse extraction result: {e}\nRaw: {raw[:300]}")

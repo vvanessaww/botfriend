@@ -11,13 +11,13 @@ from faster_whisper import WhisperModel
 from botfriend.models import TranscriptSegment
 from botfriend.pipeline.audio import AudioChunk
 
-NO_SPEECH_THRESHOLD = 0.6
+NO_SPEECH_THRESHOLD = 0.7
 
 
 class Transcriber:
     def __init__(
         self,
-        model_size: str = "base",
+        model_size: str = "base.en",
         device: str = "cpu",
         compute_type: str = "int8",
     ) -> None:
@@ -29,15 +29,17 @@ class Transcriber:
 
         self._diarizer = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token,
+            token=hf_token,
         )
 
     def transcribe(self, chunk: AudioChunk) -> list[TranscriptSegment]:
         segments_iter, info = self._model.transcribe(
             chunk.data,
-            beam_size=5,
+            beam_size=1,
             language="en",
-            vad_filter=True,
+            vad_filter=False,
+            condition_on_previous_text=True,
+            temperature=0.0,
         )
 
         results: list[TranscriptSegment] = []
@@ -69,12 +71,15 @@ class Transcriber:
         import torch
 
         waveform = torch.from_numpy(chunk.data).unsqueeze(0)
-        diarization = self._diarizer(
+        result = self._diarizer(
             {"waveform": waveform, "sample_rate": chunk.sample_rate}
         )
 
+        # pyannote >= 3.1 returns DiarizeOutput; get the annotation from it
+        annotation = getattr(result, "speaker_diarization", result)
+
         mid_point = (start + end) / 2
-        for turn, _, speaker_label in diarization.itertracks(yield_label=True):
+        for turn, _, speaker_label in annotation.itertracks(yield_label=True):
             if turn.start <= mid_point <= turn.end:
                 return speaker_label
         return "Speaker"

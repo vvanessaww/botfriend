@@ -14,7 +14,7 @@ class ActionExtractor:
     def __init__(
         self,
         runner: ClaudeRunner,
-        interval_seconds: float = 10.0,
+        interval_seconds: float = 5.0,
     ) -> None:
         self.runner = runner
         self.interval_seconds = interval_seconds
