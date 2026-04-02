@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from botfriend.models import ActionItem, TranscriptSegment
 from botfriend.executor.claude_runner import ClaudeRunner
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_CONFIDENCES = {"high", "medium"}
 
@@ -35,10 +38,12 @@ class ActionExtractor:
             return []
 
         transcript_text = self.format_transcript()
+        logger.debug("Extracting from %d segments:\n%s", len(self.transcript_buffer), transcript_text)
         raw_actions = await self.runner.extract_actions(
             transcript_text,
             self._previous_items,
         )
+        logger.debug("Raw extraction result: %s", raw_actions)
 
         items: list[ActionItem] = []
         for raw in raw_actions:

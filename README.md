@@ -111,6 +111,8 @@ Key design decisions:
 
 - **Extraction deduplication.** The extractor passes previously extracted items back to Claude so it doesn't re-extract the same idea. If the conversation refines something, the new version supersedes the old one.
 
+For a deeper dive into the pipeline design, edge cases, and design decisions, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ```
 botfriend/
 ├── src/botfriend/

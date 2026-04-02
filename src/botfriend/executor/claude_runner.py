@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 EXTRACTION_PROMPT_TEMPLATE = """You are analyzing a live conversation between people discussing a software product. Extract any actionable code changes mentioned.
@@ -55,6 +58,8 @@ class ClaudeRunner:
         if self.session_id:
             cmd.extend(["--resume", self.session_id])
 
+        logger.debug("Executing: %s", " ".join(cmd))
+
         env = {**os.environ}
         env.pop("CLAUDECODE", None)
 
@@ -69,6 +74,7 @@ class ClaudeRunner:
 
         if proc.returncode != 0:
             err = stderr.decode().strip() or stdout.decode().strip() or "Unknown error"
+            logger.debug("Execution failed (exit %d): %s", proc.returncode, err)
             return ExecutionResult(
                 text=f"Error (exit {proc.returncode}): {err}",
                 session_id=self.session_id,
@@ -76,6 +82,7 @@ class ClaudeRunner:
             )
 
         raw = stdout.decode()
+        logger.debug("Execution stdout (%d bytes): %s", len(raw), raw[:500])
         try:
             data = json.loads(raw)
             text = data.get("result", raw)

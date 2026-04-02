@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from textual.widgets import RichLog
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_markup(text: str) -> str:
@@ -39,8 +42,8 @@ class ExecutionLog(RichLog):
             timestamp = datetime.now().strftime("%H:%M:%S")
             with open(self._log_path, "a") as f:
                 f.write(f"[{timestamp}] {plain}\n")
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("Failed to write to log file %s: %s", self._log_path, e)
 
     def write(self, *args, **kwargs) -> None:
         if args:

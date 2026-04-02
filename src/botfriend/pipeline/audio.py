@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import AsyncIterator
 
 import numpy as np
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ class AudioCapture:
 
         def callback(indata: np.ndarray, frames: int, time_info: object, status: object) -> None:
             if status:
-                pass
+                logger.warning("Audio stream status: %s", status)
             loop.call_soon_threadsafe(self._on_audio_data, indata.copy())
 
         with sd.InputStream(

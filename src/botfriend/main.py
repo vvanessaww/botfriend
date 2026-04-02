@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 
@@ -26,8 +27,19 @@ def main() -> None:
         action="store_true",
         help="Disable speaker diarization",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug logging to stderr",
+    )
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
 
     project_dir = os.path.abspath(args.project_dir)
     if not os.path.isdir(project_dir):
