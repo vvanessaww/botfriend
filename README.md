@@ -4,6 +4,16 @@ Talk about code changes out loud. Botfriend listens, figures out what's actionab
 
 It started as a way to speed up pair ideation sessions. Two people sit down, talk through what they want to change, and the tool handles everything between "we should make the button blue" and the actual code diff. No context switching, no writing tickets, no "I'll get to that later."
 
+## Why this exists
+
+As a PM, most of my actual work happens in conversation. The real decisions get made in standups, design reviews, pair sessions - not in Jira tickets. But after every call, there's this tax: write up the notes, translate decisions into tickets, follow up to make sure things actually get built. Half the context gets lost in translation. The other half gets deprioritized.
+
+I kept thinking - what if you could skip all of that? What if the conversation *was* the build? You're in a room talking through changes ("make the button blue, move the nav to the left, add a loading spinner") and they just... happen. No tickets, no handoff, no "can you remind me what we decided?"
+
+That's botfriend. It listens to your conversation, transcribes it in real time with speaker identification, extracts what's actionable, and queues it up for you to confirm. Hit Enter and Claude Code executes the change against your codebase. The conversation becomes the interface. Building becomes truly collaborative - not "talk, then build separately later," but "talk and build at the same time."
+
+The hardest part wasn't the AI - it was the product decisions. When do you batch transcript segments? How do you handle conflicting requests from different speakers? What confidence threshold is too aggressive? These are product problems disguised as engineering problems, and that's exactly the kind of thing I love working on.
+
 ## How it works
 
 Botfriend runs a four-stage async pipeline. Each stage operates independently, so a slow code execution never blocks transcription or extraction.
