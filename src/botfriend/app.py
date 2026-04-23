@@ -22,18 +22,25 @@ from botfriend.widgets.edit_screen import EditScreen
 from botfriend.widgets.execution_log import ExecutionLog
 from botfriend.widgets.queue_panel import QueuePanel
 from botfriend.widgets.transcript_panel import TranscriptPanel
+from botfriend.widgets.waveform import Waveform
 
 
 class BotfriendApp(App):
     CSS = """
-    #top-row {
-        height: 1fr;
-    }
-    #transcript {
+    #left-col {
         width: 2fr;
     }
-    #queue {
+    #right-col {
         width: 1fr;
+    }
+    #waveform {
+        height: 3;
+    }
+    #transcript {
+        height: 1fr;
+    }
+    #queue {
+        height: 1fr;
     }
     #execution {
         height: auto;
@@ -65,14 +72,17 @@ class BotfriendApp(App):
         self._listening = False
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            with Horizontal(id="top-row"):
+        log_path = Path(self.project_dir) / "botfriend.log"
+        with Horizontal():
+            with Vertical(id="left-col"):
+                yield Waveform()
                 yield TranscriptPanel()
+            with Vertical(id="right-col"):
                 yield QueuePanel()
-            log_path = Path(self.project_dir) / "botfriend.log"
-            yield ExecutionLog(log_path=log_path)
+                yield ExecutionLog(log_path=log_path)
 
     def on_mount(self) -> None:
+        self.query_one(Waveform).id = "waveform"
         self.query_one(TranscriptPanel).id = "transcript"
         self.query_one(QueuePanel).id = "queue"
         self.query_one(ExecutionLog).id = "execution"
@@ -83,11 +93,19 @@ class BotfriendApp(App):
         if self.enable_audio:
             self._start_pipeline()
             exec_log.write("[bold green]Mic LISTENING[/] -- press [bold]p[/] to pause")
+            self._waveform_timer = self.set_interval(1 / 15, self._refresh_waveform)
         else:
             exec_log.write("[dim]Audio disabled (test mode)[/]")
 
+    def _refresh_waveform(self) -> None:
+        try:
+            self.query_one(Waveform).refresh()
+        except Exception:
+            pass
+
     def _start_pipeline(self) -> None:
-        self._audio = AudioCapture()
+        waveform = self.query_one(Waveform)
+        self._audio = AudioCapture(on_level=waveform.push_level)
         if self._transcriber is None:
             self._transcriber = Transcriber()
         self._coding_runner = ClaudeRunner(project_dir=self.project_dir)
@@ -107,14 +125,17 @@ class BotfriendApp(App):
             if self._paused:
                 continue
             try:
+                transcript_panel.show_processing()
                 segments = await loop.run_in_executor(
                     executor,
                     functools.partial(self._transcriber.transcribe, chunk),
                 )
+                transcript_panel.hide_processing()
                 for seg in segments:
                     transcript_panel.add_segment(seg)
                     self._extractor.add_segment(seg)
             except Exception as e:
+                transcript_panel.hide_processing()
                 exec_log.write(f"[bold red]Transcription error:[/] {e}")
 
     async def _extraction_loop(self) -> None:
@@ -158,12 +179,10 @@ class BotfriendApp(App):
         if execution_result.success:
             self._queue = self._queue.mark_done(index)
             exec_log.log_done(item.description)
-            # Show what Claude said it did
             summary = execution_result.text
             if len(summary) > 300:
                 summary = summary[:300] + "..."
             exec_log.write(f"  [dim]{summary}[/]")
-            # Show file changes
             try:
                 diff = await self._coding_runner.get_diff()
                 if diff:
@@ -207,7 +226,7 @@ class BotfriendApp(App):
             if hasattr(self, "_audio"):
                 self._audio.stop()
             self._listening = False
-            exec_log.write("[bold yellow]Mic PAUSED[/] -- press [bold]p[/] to resume")
+            exec_log.write("[bold yellow]Mic PAUSED[/] -- press [bold]p[/] to unpause")
         else:
             self._listening = True
             if self.enable_audio:
@@ -216,7 +235,8 @@ class BotfriendApp(App):
 
     async def _restart_audio(self) -> None:
         """Restart the audio stream after unpausing."""
-        self._audio = AudioCapture()
+        waveform = self.query_one(Waveform)
+        self._audio = AudioCapture(on_level=waveform.push_level)
         transcript_panel = self.query_one(TranscriptPanel)
         exec_log = self.query_one(ExecutionLog)
         loop = asyncio.get_event_loop()
@@ -225,12 +245,15 @@ class BotfriendApp(App):
             if self._paused:
                 break
             try:
+                transcript_panel.show_processing()
                 segments = await loop.run_in_executor(
                     executor,
                     functools.partial(self._transcriber.transcribe, chunk),
                 )
+                transcript_panel.hide_processing()
                 for seg in segments:
                     transcript_panel.add_segment(seg)
                     self._extractor.add_segment(seg)
             except Exception as e:
+                transcript_panel.hide_processing()
                 exec_log.write(f"[bold red]Transcription error:[/] {e}")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -11,7 +13,23 @@ from faster_whisper import WhisperModel
 from botfriend.models import TranscriptSegment
 from botfriend.pipeline.audio import AudioChunk
 
-NO_SPEECH_THRESHOLD = 0.7
+# If Whisper thinks there's a >40% chance nobody is speaking, skip it.
+NO_SPEECH_THRESHOLD = 0.4
+
+# Segments with avg_logprob below this are low-confidence garbage.
+MIN_LOG_PROB = -1.0
+
+# Common Whisper hallucinations on background noise.
+_HALLUCINATION_PATTERNS = re.compile(
+    r"^("
+    r"(i'?m not sure|thank you|thanks for watching|"
+    r"you|bye|okay|oh|hmm|uh|um|ah|so|"
+    r"subscribe|like and subscribe|see you next time|"
+    r"the end|\.+|,+)"
+    r"[.!?, ]*"
+    r")+$",
+    re.IGNORECASE,
+)
 
 
 class Transcriber:
@@ -23,6 +41,8 @@ class Transcriber:
     ) -> None:
         self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
         self._diarizer: Optional[object] = None
+        # Track recent outputs to catch repetition hallucinations
+        self._recent_texts: deque[str] = deque(maxlen=5)
 
     def enable_diarization(self, hf_token: str) -> None:
         from pyannote.audio import Pipeline
@@ -37,18 +57,39 @@ class Transcriber:
             chunk.data,
             beam_size=1,
             language="en",
-            vad_filter=False,
-            condition_on_previous_text=True,
+            vad_filter=True,
+            vad_parameters=dict(
+                min_speech_duration_ms=250,
+                min_silence_duration_ms=400,
+                speech_pad_ms=100,
+            ),
+            condition_on_previous_text=False,
             temperature=0.0,
         )
 
         results: list[TranscriptSegment] = []
         for seg in segments_iter:
+            # High no-speech probability — skip
             if seg.no_speech_prob > NO_SPEECH_THRESHOLD:
                 continue
+
+            # Very low confidence — skip
+            if seg.avg_logprob < MIN_LOG_PROB:
+                continue
+
             text = seg.text.strip()
             if not text:
                 continue
+
+            # Filter known hallucination phrases
+            if _HALLUCINATION_PATTERNS.match(text):
+                continue
+
+            # Filter exact repetitions (Whisper loops)
+            normalized = text.lower().strip("., !?")
+            if normalized in self._recent_texts:
+                continue
+
             confidence = math.exp(seg.avg_logprob)
             speaker = self._identify_speaker(chunk, seg.start, seg.end)
             results.append(
@@ -60,6 +101,8 @@ class Transcriber:
                     confidence=confidence,
                 )
             )
+            self._recent_texts.append(normalized)
+
         return results
 
     def _identify_speaker(

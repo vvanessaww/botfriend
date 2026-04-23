@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -27,8 +28,9 @@ class AudioCapture:
     def __init__(
         self,
         sample_rate: int = 16000,
-        chunk_duration: float = 2.0,
-        overlap_duration: float = 0.5,
+        chunk_duration: float = 1.0,
+        overlap_duration: float = 0.2,
+        on_level: Optional[Callable[[float], None]] = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
@@ -36,6 +38,9 @@ class AudioCapture:
         self._buffer = np.array([], dtype=np.float32)
         self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
         self._running = False
+        self._on_level = on_level
+        # Small buffer to compute RMS from recent samples (~50ms worth)
+        self._level_window = int(sample_rate * 0.05)
 
     @property
     def chunk_size(self) -> int:
@@ -47,11 +52,26 @@ class AudioCapture:
 
     def _on_audio_data(self, indata: np.ndarray) -> None:
         mono = indata[:, 0] if indata.ndim > 1 else indata
+
+        # Compute and emit RMS level for waveform display
+        if self._on_level is not None and len(mono) > 0:
+            rms = float(np.sqrt(np.mean(mono ** 2)))
+            # Scale up for visibility (typical speech RMS is 0.01-0.1)
+            scaled = min(rms * 10.0, 1.0)
+            self._on_level(scaled)
+
         self._buffer = np.concatenate([self._buffer, mono])
 
         while len(self._buffer) >= self.chunk_size:
             chunk_data = self._buffer[: self.chunk_size].copy()
             self._buffer = self._buffer[self.chunk_size - self.overlap_size :]
+
+            # Energy gate: skip chunks that are just background noise.
+            # RMS below this threshold means nobody is talking.
+            rms = float(np.sqrt(np.mean(chunk_data ** 2)))
+            if rms < 0.005:
+                continue
+
             # Normalize audio so Whisper gets a strong signal
             peak = np.abs(chunk_data).max()
             if peak > 0.001:

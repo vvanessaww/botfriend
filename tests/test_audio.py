@@ -22,8 +22,8 @@ class TestAudioCapture:
     def test_create_with_defaults(self):
         capture = AudioCapture()
         assert capture.sample_rate == 16000
-        assert capture.chunk_duration == 2.0
-        assert capture.overlap_duration == 0.5
+        assert capture.chunk_duration == 1.0
+        assert capture.overlap_duration == 0.2
 
     def test_create_with_custom_params(self):
         capture = AudioCapture(sample_rate=44100, chunk_duration=5.0, overlap_duration=2.0)
